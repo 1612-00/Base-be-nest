@@ -1,0 +1,71 @@
+stages:
+- install
+- test
+- eslint
+- build
+- deploy-stage
+
+variables:
+  VARIABLE_DATA: Gitlab-CI-YAML
+  DOCKER_HOST: tcp://docker:2375
+  IMAGE_NAME_DEV: c5-backend-dev
+
+install:
+  stage: install
+  script:
+  - echo $CI_REGISTRY_IMAGE
+
+
+test:
+  stage: test
+  script:
+  - echo $CI_PROJECT_PATH_SLUG
+
+
+eslint:
+  stage: eslint
+  script:
+  - echo $CI_PROJECT_PATH_SLUG
+
+build:
+  stage: build
+  image: docker:18-git
+  services:
+  - docker:18-dind
+  script:
+  - echo $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+  - echo $CI_COMMIT_BRANCH
+  - echo $CI_COMMIT_REF_NAME
+  - if [ "$CI_COMMIT_BRANCH == develop" ]; then echo "$ENV_DEV" > .env; fi
+  - echo $CI_PROJECT_PATH_SLUG
+  - docker build -t $IMAGE_NAME_DEV .
+  - docker tag $IMAGE_NAME_DEV $CI_REGISTRY_USER/$IMAGE_NAME_DEV:latest
+  - docker images
+  # login docker
+  - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" docker.io
+  # publish finished image
+  - docker push $CI_REGISTRY_USER/$IMAGE_NAME_DEV:latest
+  only:
+  - develop
+
+deploy-stage:
+  stage: deploy-stage
+  image: alpine:latest
+  before_script:
+  - 'which ssh-agent || ( apk update && apk add openssh-client )'
+  - eval $(ssh-agent -s)
+  - echo $STAGE_ID_RSA
+  - ssh-add <(echo "$STAGE_ID_RSA")
+  - mkdir -p ~/.ssh
+  - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+  script:
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker stop $CI_PROJECT_NAME || true"
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker rm $CI_PROJECT_NAME || true"
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker image rm $CI_REGISTRY_USER/$IMAGE_NAME_DEV:latest || true"
+  # pull new container
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD""
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker pull $CI_REGISTRY_USER/$IMAGE_NAME_DEV:latest"
+  # run new container
+  - ssh $STAGE_SERVER_USER@$STAGE_SERVER_IP "docker run -d --restart unless-stopped --name $CI_PROJECT_NAME -p 3125:3125 -e "variableData=Docker-Run-Command" $CI_REGISTRY_USER/$IMAGE_NAME_DEV:latest"
+  only:
+  - develop
